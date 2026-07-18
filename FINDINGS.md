@@ -27,6 +27,7 @@ with code execution inside the gateway process.
 | ID | Finding | Invariant | Attacker role | Status |
 |---|---|---|---|---|
 | F-01 | Unauthenticated gateway with a public OpenAPI map | 2 | 1 — outsider, no credentials | Fixed |
+| F-02 | Config disclosure on the read endpoints (`/v1/status`, `/v1/providers`, `/v1/capabilities`) | 2 | 1 — outsider, no credentials | Fixed by F-01 |
 
 ---
 
@@ -74,6 +75,10 @@ curl -s -X POST "$URL/v1/chat" -H 'content-type: application/json' -d '{...}'
   dependency, so the check lives in one place.
 - **`modal_app.py`** — sets `GLC_ENV=production` in the image env.
 
+Because the dependency is attached to the whole `chat.py` router, it covers the
+read endpoints on that router too — which is what closed **F-02** without a
+second code change.
+
 Deliberately **not** gated: `/v1/channels/{name}/webhook` stays public because
 external providers (Twilio, LINE) cannot present the install token. The channels
 WebSocket and `/v1/control/*` keep their existing token checks. `/healthz` and
@@ -108,3 +113,64 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL/v1/chat" \
 Callers now need the Bearer token, which lives on the Modal volume at
 `/data/glc/install_token`. Since the endpoint was open before this fix, rotate
 the provider keys and the install token in case they were probed.
+
+---
+
+## F-02 — Config disclosure on the read endpoints
+
+**Invariant broken:** **#2 — "Every action must be checked against the actual
+user, tenant, and final arguments."** The read endpoints answered anyone with
+the provider order, the model behind each provider, and the exact rpm/rpd/tpm
+limits without checking any principal, and they are reached by the weakest
+attacker role — an outsider on the public internet with no credentials.
+
+This is the same invariant as F-01, and deliberately so: same trust boundary
+(outsider → gateway), same missing check, different assets behind it.
+
+Secondary: **#8** — publishing the exact rate limits is reconnaissance *for
+evading* them, since an attacker who knows rpm/rpd/tpm can tune abuse to sit
+just under the ceiling.
+
+**Attacker role:** (1) outsider on the public internet, no credentials.
+
+**Asset reached:** internal configuration (provider order, model per provider,
+rate limits) — and, via `/v1/calls` and `/v1/cost/by_agent`, the **cost
+ledger**, a named Section 3 asset. This one is not purely about configuration.
+
+### Reproduction (before the fix)
+
+```sh
+curl -s "$URL/v1/status"        # -> 200, provider list + models + rpm/rpd/tpm
+curl -s "$URL/v1/providers"     # -> 200
+curl -s "$URL/v1/capabilities"  # -> 200
+```
+
+### Fix
+
+**No separate code change was required — F-01 already closed this.**
+
+All of these routes are declared on the *same* `APIRouter` as `/v1/chat`
+(`router = APIRouter()` at `glc/routes/chat.py:72`). F-01 attached
+`dependencies=[Depends(require_install_token)]` to that entire router in
+`glc/main.py`, so every read endpoint on it inherited the token check.
+
+That is the argument for gating at the router rather than per-handler: the
+config-disclosure endpoints were fixed before they were separately reported,
+and any route added to that router in future is closed by default rather than
+open by default.
+
+### Confirmed after the fix
+
+Every read endpoint on the router, in production mode:
+
+| Endpoint | no token | with token |
+|---|---|---|
+| `GET /v1/status` | **401** | 200 |
+| `GET /v1/providers` | **401** | 200 |
+| `GET /v1/capabilities` | **401** | 200 |
+| `GET /v1/embedders` | **401** | 200 |
+| `GET /v1/routers` | **401** | 200 |
+| `GET /v1/calls` | **401** | 200 |
+| `GET /v1/cost/by_agent` | **401** | 200 |
+
+The disclosure fails for an unauthenticated caller.
