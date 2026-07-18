@@ -15,7 +15,7 @@ from pathlib import Path
 import modal
 
 # The Modal "app" is just a namespace for everything we deploy under this name.
-app = modal.App("glc-v1-gateway")
+app = modal.App("glc-v2-gateway")
 
 # Path to the glc package next to this file. We copy the whole package (not just
 # .py files) so its data files travel too: policy.yaml, channels.yaml,
@@ -39,7 +39,7 @@ image = (
         "websockets>=12.0",
         "twilio>=9.0",
     )
-    .env({"GLC_CONFIG_DIR": "/data/glc"})
+    .env({"GLC_CONFIG_DIR": "/data/glc", "GLC_ENV": "production"})
     .add_local_dir(str(LOCAL_GLC), remote_path="/root/glc")
 )
 

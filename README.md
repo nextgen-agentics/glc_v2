@@ -26,6 +26,13 @@ To deploy on Modal, see `modal_app.py` and Session 12 Section 6. Use mock keys o
 - `glc/` — the gateway source.
 - `modal_app.py` — the Modal deployment wrapper.
 - `/openapi.json` and `/docs` on a running gateway — the full route inventory.
+  **Dev only**: both are disabled when `GLC_ENV=production` (see F-01).
+
+## Hardening (Part 1)
+
+Findings fixed so far are logged in [`FINDINGS.md`](FINDINGS.md) — each with the
+Section 4 invariant it broke, the attacker role that reaches it, and the
+reproduction that now fails.
 
 ## License
 

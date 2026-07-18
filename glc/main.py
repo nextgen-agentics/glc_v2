@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
 
 ROOT = Path(__file__).parent
@@ -22,6 +22,7 @@ from glc import db  # noqa: E402
 from glc import embedders as E  # noqa: E402
 from glc import providers as P  # noqa: E402
 from glc.audit import init_store as init_audit  # noqa: E402
+from glc.auth import require_install_token  # noqa: E402
 from glc.cache import GeminiCache  # noqa: E402
 from glc.config import get_or_create_install_token  # noqa: E402
 from glc.policy import reload_engine  # noqa: E402
@@ -73,22 +74,37 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="GLC v1 — Gateway for LLMs and Channels", lifespan=lifespan)
+# In production, disable the interactive docs and the OpenAPI schema so the
+# full route/schema map isn't served to unauthenticated callers (recon). Dev
+# keeps them on. Set GLC_ENV=production on the deployment (see modal_app.py).
+_PROD = os.getenv("GLC_ENV", "").lower() == "production"
 
-app.include_router(chat_route.router)
-app.include_router(transcribe_route.router)
-app.include_router(speak_route.router)
-app.include_router(control_route.router)
-app.include_router(channels_route.router)
+app = FastAPI(
+    title="GLC v1 — Gateway for LLMs and Channels",
+    lifespan=lifespan,
+    docs_url=None if _PROD else "/docs",
+    redoc_url=None if _PROD else "/redoc",
+    openapi_url=None if _PROD else "/openapi.json",
+)
+
+# Data-plane routes require the install-token Bearer. Webhooks (channels) and
+# the control plane keep their own token checks and are attached without it.
+_auth = [Depends(require_install_token)]
+app.include_router(chat_route.router, dependencies=_auth)
+app.include_router(transcribe_route.router, dependencies=_auth)
+app.include_router(speak_route.router, dependencies=_auth)
+app.include_router(control_route.router)  # handlers already check the token
+app.include_router(channels_route.router)  # WS checks token; webhooks stay public
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
+    docs_line = "" if _PROD else "<p>Open <code>/docs</code> for the OpenAPI explorer.</p>"
     return (
         "<html><body style='font-family:sans-serif;max-width:680px;margin:2em auto'>"
         "<h1>GLC v1</h1>"
         "<p>Gateway for LLMs and Channels — Session 11 scaffold.</p>"
-        "<p>Open <code>/docs</code> for the OpenAPI explorer.</p>"
+        f"{docs_line}"
         "<p>Channel adapters connect over <code>WS /v1/channels/&lt;name&gt;</code>."
         " V9 callers should point at this port unchanged: chat, vision, embed,"
         " batch, cost-by-agent, providers, capabilities, status, calls."

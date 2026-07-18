@@ -14,19 +14,15 @@ import time
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from glc.config import get_or_create_install_token
+from glc.auth import require_install_token
 from glc.security.pairing import CODE_TTL_SECONDS, get_pairing_store
 
 router = APIRouter()
 
 
 def _require_token(authorization: str | None) -> None:
-    expected = get_or_create_install_token()
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing bearer token (Authorization: Bearer <install_token>)")
-    presented = authorization.removeprefix("Bearer ").strip()
-    if presented != expected:
-        raise HTTPException(403, "install token mismatch")
+    # Delegate to the shared dependency so the check lives in one place.
+    require_install_token(authorization)
 
 
 class PairRequest(BaseModel):
